@@ -155,6 +155,38 @@ export default function App() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [sliderImages, setSliderImages] = useState<SliderImage[]>([]);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [dbStatus, setDbStatus] = useState<{ type: string, connected: boolean } | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+    fetch('/api/db-status')
+      .then(res => res.json())
+      .then(data => {
+        if (isMounted) setDbStatus(data);
+      })
+      .catch(() => {
+        if (isMounted) setDbStatus({ type: 'sqlite', connected: false });
+      });
+    return () => { isMounted = false; };
+  }, []);
+
+  const DatabaseStatus = () => {
+    if (!dbStatus) {
+      return (
+        <div className="fixed bottom-4 right-4 z-[100] px-4 py-2 rounded-full shadow-lg flex items-center gap-2 text-xs font-bold bg-neutral-800 text-white opacity-50">
+          <div className="w-2 h-2 bg-white rounded-full animate-ping" />
+          Connecting...
+        </div>
+      );
+    }
+    const isCloud = dbStatus.type === 'supabase';
+    return (
+      <div className={`fixed bottom-4 right-4 z-[100] px-4 py-2 rounded-full shadow-lg flex items-center gap-2 text-xs font-bold transition-all ${isCloud ? 'bg-emerald-600 text-white' : 'bg-red-600 text-white animate-pulse'}`}>
+        {isCloud ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
+        {isCloud ? 'Cloud Connected' : 'Local Mode (Data will be lost)'}
+      </div>
+    );
+  };
 
   useEffect(() => {
     const savedUser = localStorage.getItem('user');
@@ -184,21 +216,22 @@ export default function App() {
     setView('login');
   };
 
-  if (view === 'login' || view === 'register' || view === 'forgot-password') {
-    return <AuthView setView={setView} setUser={setUser} view={view} />;
-  }
-
-  if (user?.role === 'admin') {
-    return <AdminDashboard user={user} onLogout={handleLogout} settings={settings} onSettingsUpdate={fetchSettings} sliderImages={sliderImages} onSliderUpdate={fetchSliderImages} />;
-  }
-
-  return <MemberDashboard user={user!} onLogout={handleLogout} settings={settings} sliderImages={sliderImages} />;
+  return (
+    <>
+      <DatabaseStatus />
+      {view === 'login' || view === 'register' || view === 'forgot-password' ? (
+        <AuthView setView={setView} setUser={setUser} view={view} />
+      ) : user?.role === 'admin' ? (
+        <AdminDashboard user={user} setUser={setUser} onLogout={handleLogout} settings={settings} onSettingsUpdate={fetchSettings} sliderImages={sliderImages} onSliderUpdate={fetchSliderImages} />
+      ) : (
+        <MemberDashboard user={user!} setUser={setUser} onLogout={handleLogout} settings={settings} sliderImages={sliderImages} />
+      )}
+    </>
+  );
 }
 
 const LOGO_URL = "https://i.ibb.co.com/3QpQ41P/Whats-App-Image-2026-03-03-at-10-33-14-PM.jpg"; // Replace this with your actual image link
-const API_BASE = window.location.origin.includes('localhost') && !window.location.port 
-  ? 'https://ais-dev-a5pcinx3dt7xeqccnwahce-252051446105.asia-east1.run.app' 
-  : window.location.origin;
+const API_BASE = '';
 
 function AuthView({ setView, setUser, view }: { setView: any, setUser: any, view: string }) {
   const [formData, setFormData] = useState({ name: '', phone: '', password: '', newPassword: '' });
@@ -403,7 +436,7 @@ function AuthView({ setView, setUser, view }: { setView: any, setUser: any, view
   );
 }
 
-function AdminDashboard({ user, onLogout, settings, onSettingsUpdate, sliderImages, onSliderUpdate }: { user: User, onLogout: () => void, settings: Settings | null, onSettingsUpdate: () => void, sliderImages: SliderImage[], onSliderUpdate: () => void }) {
+function AdminDashboard({ user, setUser, onLogout, settings, onSettingsUpdate, sliderImages, onSliderUpdate }: { user: User, setUser: (u: User) => void, onLogout: () => void, settings: Settings | null, onSettingsUpdate: () => void, sliderImages: SliderImage[], onSliderUpdate: () => void }) {
   const [members, setMembers] = useState<any[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -514,17 +547,22 @@ function AdminDashboard({ user, onLogout, settings, onSettingsUpdate, sliderImag
     const reader = new FileReader();
     reader.onloadend = async () => {
       const base64String = reader.result as string;
-      const res = await fetch(API_BASE + '/api/user/update-profile', {
+      // Update the form state so the user sees the preview
+      setAdminFormData(prev => ({ ...prev, admin_profile_pic: base64String }));
+      
+      // Also update the user's profile pic in the users table for consistency
+      await fetch(API_BASE + '/api/user/update-profile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId: user.id, profilePic: base64String })
       });
-      if (res.ok) {
-        const updatedUser = { ...user, profile_pic: base64String };
-        localStorage.setItem('user', JSON.stringify(updatedUser));
-        alert('প্রোফাইল ছবি সফলভাবে আপলোড করা হয়েছে।');
-        window.location.reload();
-      }
+      
+      // Update local storage and parent state so the header/sidebar updates
+      const updatedUser = { ...user, profile_pic: base64String };
+      localStorage.setItem('user', JSON.stringify(updatedUser));
+      setUser(updatedUser);
+      
+      alert('ছবিটি প্রিভিউতে সেট করা হয়েছে। স্থায়ীভাবে সেভ করতে নিচের "সেটিংস আপডেট করুন" বাটনে ক্লিক করুন।');
     };
     reader.readAsDataURL(file);
   };
@@ -767,6 +805,7 @@ function AdminDashboard({ user, onLogout, settings, onSettingsUpdate, sliderImag
     return (
       <MemberDashboard 
         user={viewingMember} 
+        setUser={setViewingMember}
         onLogout={onLogout} 
         settings={settings} 
         sliderImages={sliderImages} 
@@ -1854,7 +1893,7 @@ function AdminDashboard({ user, onLogout, settings, onSettingsUpdate, sliderImag
   );
 }
 
-function MemberDashboard({ user, onLogout, settings, sliderImages, onBackToAdmin }: { user: User, onLogout: () => void, settings: Settings | null, sliderImages: SliderImage[], onBackToAdmin?: () => void }) {
+function MemberDashboard({ user, setUser, onLogout, settings, sliderImages, onBackToAdmin }: { user: User, setUser: (u: User) => void, onLogout: () => void, settings: Settings | null, sliderImages: SliderImage[], onBackToAdmin?: () => void }) {
   const [payments, setPayments] = useState<Payment[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
@@ -2048,6 +2087,7 @@ function MemberDashboard({ user, onLogout, settings, sliderImages, onBackToAdmin
         setProfilePic(base64String);
         const updatedUser = { ...user, profile_pic: base64String };
         localStorage.setItem('user', JSON.stringify(updatedUser));
+        setUser(updatedUser);
         alert('প্রোফাইল ছবি সফলভাবে আপলোড করা হয়েছে।');
       }
     };
